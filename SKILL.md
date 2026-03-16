@@ -4,7 +4,7 @@ description: BaoClaw — price protection for Pokemon TCG cards. Put options set
 version: 9.0.0
 user-invocable: true
 command-arg-mode: raw
-metadata: {"openclaw":{"emoji":"🐾","requires":{"bins":["cast","curl","jq"],"env":["BAOCLAW_ADDRESS","USDC_ADDRESS","BAO_TOKEN_ADDRESS"]},"primaryEnv":"PRIVY_APP_SECRET"}}
+metadata: {"openclaw":{"emoji":"🐾","requires":{"bins":["cast","curl","jq"],"env":["BAOCLAW_ADDRESS"]},"depends":["privy"]}}
 ---
 
 # BaoClaw — Pokemon TCG Price Protection / 宝可梦卡牌价格保护
@@ -13,7 +13,7 @@ You are an agent that executes the `!bao` command. BaoClaw sells put options on 
 
 No owner. No governance. No oracle. Prices are crowdsourced by reporters who post USDC bonds and submit prices scraped from multiple sources. Median of N reports = canonical price. Outliers get slashed.
 
-Buying puts, funding the pool, withdrawing from the pool, and reporting prices each burn 0.3% of the USDC amount in $BAO tokens (true burn via `burnFrom` — reduces totalSupply permanently). Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
+Every write operation burns $BAO tokens (true burn via `burnFrom` — reduces totalSupply permanently): buying puts burns 0.3% of the premium, funding/withdrawing the pool burns 0.3% of the USDC amount, and reporting prices burns 0.3% of the bond. Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
 
 10% of each put premium is distributed equally to honest fresh reporters as rewards (claimable via `claimRewards`). The remaining 90% goes to the insurance pool.
 
@@ -36,9 +36,9 @@ Before **any** put purchase or price report, you MUST show the card image to the
 
 If multiple matches are found, show the top 3-5 results with images and ask the user to pick one.
 
-### Caching
+### Rate limits
 
-Card metadata (name, set, images, pokemontcg.io ID) is cached locally in `bot/.cache/cards.json` for 30 days. Price data is refreshed every 12 hours. Images are cached in `bot/.cache/images/`. The cache avoids redundant API calls — the pokemontcg.io free tier allows 20K requests/day.
+The pokemontcg.io API allows 1,000 requests/day without a key, or 20,000/day with a free API key (register at dev.pokemontcg.io). The agent should avoid redundant lookups for the same card within a session.
 
 ## Language Detection / 语言检测
 
@@ -50,7 +50,7 @@ Detect the user's language from their message. If the user writes in Chinese (Si
 !bao <card name> put <days>       Buy price protection / 购买价格保护
 !bao <card name> quote <days>    Quote premium for protection / 查询保护权利金
 !bao <card name> price           Check current median price / 查看当前众包价格
-!bao <card name> report          Report a card's price (posts 10 USDC bond) / 报价（质押 10 USDC 保证金）
+!bao <card name> report          Report a card's price (1% bond, min 10 USDC) / 报价（1% 保证金，最低 10 USDC）
 !bao <card name> claim-bond      Reclaim bond after report expires / 领回过期保证金
 !bao claim-rewards               Claim accumulated reporter rewards / 领取报价奖励
 !bao <putId> exercise            Exercise a put (claim payout) / 行权（领取补偿）
@@ -91,77 +91,57 @@ Not all sources will have data for every card. Use whatever is available (minimu
 
 | Variable | Required | Description |
 |---|---|---|
-| `BAOCLAW_ADDRESS` | Yes | Deployed BaoClaw contract address |
-| `USDC_ADDRESS` | Yes | USDC token address on BSC |
-| `BAO_TOKEN_ADDRESS` | Yes | $BAO token: `0x67777b71A41eebab7D3aD06498D9d48669025873` |
-| `RPC_URL` | No | BSC RPC (default: `https://bsc-dataseed.binance.org/`) |
-| `POKEMONTCG_API_KEY` | No | Free API key from dev.pokemontcg.io (20K req/day). Stored on user's machine. |
-| `PRIVY_APP_ID` | For writes | Privy app ID for embedded wallet signing |
-| `PRIVY_APP_SECRET` | For writes | Privy app secret |
+| `BAOCLAW_ADDRESS` | Yes | Deployed BaoClaw contract address on BSC |
+| `POKEMONTCG_API_KEY` | No | Free API key from dev.pokemontcg.io. Without: 1K req/day per user. With: 20K/day. Skill works either way. |
 
-**Note on API keys:** There is no server involved. The pokemontcg.io API key is stored on the user's own machine as an environment variable. It is a free key (register at dev.pokemontcg.io). Without a key, the API allows 1,000 requests/day; with a key, 20,000/day.
+### Hardcoded addresses (do not change)
 
-## Wallet: Privy Embedded Wallets
+```
+USDC_ADDRESS=0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d
+BAO_TOKEN_ADDRESS=0x67777b71A41eebab7D3aD06498D9d48669025873
+RPC_URL=https://bsc-dataseed.binance.org/
+```
 
-All write transactions are signed via **Privy embedded wallets**. Users authenticate with email or social login — no MetaMask or raw private keys.
+These are fixed BSC mainnet addresses. The skill uses them directly — users do not need to set them.
 
-### Transaction signing flow
+**Note on API keys:** The pokemontcg.io API key is optional and per-user. Register free at dev.pokemontcg.io. The 1K/day unauthenticated limit is per-IP, so each user gets their own quota. The skill must work without it.
 
-1. User authenticates via Privy (email, Google, Twitter, etc.)
-2. Privy creates/retrieves an embedded wallet for the user on BSC
-3. The skill submits transactions through Privy's server-side signing API
-4. Privy signs and broadcasts to BSC
+**Note on `cast`:** The Foundry CLI tool `cast` is required for ABI-encoding calldata and reading on-chain state. Install via `curl -L https://foundry.paradigm.xyz | bash && foundryup`.
 
-### Privy API: Sign and send a transaction
+## Wallet: Privy (delegated to OpenClaw Privy skill)
 
-```bash
-curl -s -X POST "https://auth.privy.io/api/v1/wallets/${PRIVY_WALLET_ID}/rpc" \
-  -H "Authorization: Bearer ${PRIVY_ACCESS_TOKEN}" \
-  -H "privy-app-id: ${PRIVY_APP_ID}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "params": {
-      "transaction": {
-        "to": "<contract_address>",
-        "data": "<encoded_calldata>",
-        "chain_id": 56
-      }
-    }
-  }'
+BaoClaw does **not** manage wallet keys or Privy configuration. All transaction signing is delegated to the **OpenClaw Privy skill**, which handles authentication, wallet creation, and signing.
+
+### How it works
+
+1. BaoClaw encodes calldata with `cast calldata`
+2. BaoClaw delegates to the Privy skill: `!privy send-tx <to> <calldata> [--value <wei>]`
+3. The Privy skill handles authentication, signing, and broadcasting to BSC
+4. The Privy skill returns the transaction hash
+
+### Getting the user's wallet address
+
+```
+!privy wallet-address
 ```
 
 ### Encoding calldata with cast
 
-For all write operations, encode the calldata with `cast calldata`, then submit via Privy:
+For all write operations, encode the calldata with `cast calldata`, then delegate signing to the Privy skill:
 
 ```bash
 # Encode
 CALLDATA=$(cast calldata "buyPut(string,uint256)" "<cardId>" <durationDays>)
 
-# Submit via Privy
-curl -s -X POST "https://auth.privy.io/api/v1/wallets/${PRIVY_WALLET_ID}/rpc" \
-  -H "Authorization: Bearer ${PRIVY_ACCESS_TOKEN}" \
-  -H "privy-app-id: ${PRIVY_APP_ID}" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"method\": \"eth_sendTransaction\",
-    \"params\": {
-      \"transaction\": {
-        \"to\": \"${BAOCLAW_ADDRESS}\",
-        \"data\": \"${CALLDATA}\",
-        \"chain_id\": 56
-      }
-    }
-  }"
+# Delegate to Privy skill
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
-### Getting the user's wallet address
+For ERC20 approvals, send to the token contract:
 
 ```bash
-WALLET_ADDRESS=$(curl -s "https://auth.privy.io/api/v1/wallets/${PRIVY_WALLET_ID}" \
-  -H "Authorization: Bearer ${PRIVY_ACCESS_TOKEN}" \
-  -H "privy-app-id: ${PRIVY_APP_ID}" | jq -r '.address')
+CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$AMOUNT")
+!privy send-tx "$USDC_ADDRESS" "$CALLDATA"
 ```
 
 ## Protocol Constants
@@ -273,7 +253,7 @@ $BAO 销毁：<bao_burn> BAO（保证金的 0.3% — 不可退还）
 
 Ask user to confirm.
 
-### Step 4 — Approve and report via Privy
+### Step 4 — Approve and report
 
 Use the **resolved pokemontcg.io ID** (e.g., `sv1-4`) as the on-chain card identifier.
 
@@ -284,19 +264,21 @@ PRICE=$(cast to-wei "<median_price>")
 BOND=$(cast call "$BAOCLAW_ADDRESS" "quoteBond(uint256)(uint256)" "$PRICE" --rpc-url "$RPC_URL")
 ```
 
+Three transactions, all delegated to the Privy skill:
+
 1. **Approve $BAO** for burn (0.3% of bond):
 
 ```bash
-BAO_BURN=$(echo "$BOND * 3 / 10000" | bc)
+BAO_BURN=$(echo "$BOND * 3 / 1000" | bc)
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BURN")
-# Submit via Privy to BAO_TOKEN_ADDRESS
+!privy send-tx "$BAO_TOKEN_ADDRESS" "$CALLDATA"
 ```
 
 2. **Approve USDC** for bond:
 
 ```bash
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BOND")
-# Submit via Privy to USDC_ADDRESS
+!privy send-tx "$USDC_ADDRESS" "$CALLDATA"
 ```
 
 3. **Report price**:
@@ -305,7 +287,7 @@ CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BOND")
 PRICE=$(cast to-wei "<median_price>")
 # Use the resolved pokemontcg.io ID, NOT the natural language name
 CALLDATA=$(cast calldata "reportPrice(string,uint256)" "<resolved_card_id>" "$PRICE")
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 ### Step 5 — Confirm result
@@ -320,7 +302,7 @@ Reclaim a report bond after the report expires (>24h old). Resolve the card name
 ```bash
 # Use the resolved pokemontcg.io ID
 CALLDATA=$(cast calldata "claimBond(string)" "<resolved_card_id>")
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 - EN: "Bond reclaimed: <bond_amount> USDC returned."
@@ -337,20 +319,20 @@ Claim accumulated reporter rewards from put premiums. 10% of every put premium i
 ### Step 1 — Check rewards balance
 
 ```bash
-WALLET_ADDRESS=<get from Privy>
+WALLET_ADDRESS=$(!privy wallet-address)
 cast call "$BAOCLAW_ADDRESS" "reporterRewards(address)(uint256)" "$WALLET_ADDRESS" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 If balance is 0:
 - EN: "No rewards to claim. Report prices on cards with active put markets to earn rewards."
 - ZH: "没有可领取的奖励。为有活跃期权市场的卡牌报价以赚取奖励。"
 
-### Step 2 — Claim via Privy
+### Step 2 — Claim
 
 ```bash
 CALLDATA=$(cast calldata "claimRewards()")
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 - EN: "Claimed [amount] USDC in reporter rewards."
@@ -370,7 +352,7 @@ Once the card is confirmed, use the resolved pokemontcg.io ID to check the on-ch
 
 ```bash
 cast call "$BAOCLAW_ADDRESS" "getMedianPrice(string)(uint256,uint256)" "<resolved_card_id>" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 First value is the median price in USDC (wei), second is the number of fresh reports. Convert price: `cast from-wei <price>`.
@@ -383,7 +365,7 @@ Then call `quotePut` to get the protocol-computed premium:
 
 ```bash
 cast call "$BAOCLAW_ADDRESS" "quotePut(string,uint256)(uint256,uint256)" "<resolved_card_id>" <durationDays> \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 The first return value is the premium in USDC (wei), the second is the floor price. Convert: `cast from-wei <premium>`. This premium is computed by the contract using the √time × utilization kink model.
@@ -411,7 +393,7 @@ Floor protected: $<price> USDC
 Duration: <days> days
 💰 Total cost: $<premium_usdc> USDC + <bao_burn> BAO
 💰 Max payout if price drops to $0: $<price> USDC (net profit: $<price - premium_usdc>)
-💰 Break-even: price drops below $<price - premium_usdc * (price / price)> within <days> days
+💰 Break-even: price drops below $<price - premium_usdc> within <days> days
 ```
 
 **Chinese:**
@@ -433,14 +415,14 @@ Ask user to confirm.
 
 ### Step 4 — Approve $BAO and USDC, then buy
 
-Three transactions via Privy. Use the **resolved pokemontcg.io ID** for the on-chain call.
+Three transactions, all delegated to the Privy skill. Use the **resolved pokemontcg.io ID** for the on-chain call.
 
 1. **Approve $BAO** for burn:
 
 ```bash
 BAO_BURN=$(cast to-wei "<bao_burn>")
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BURN")
-# Submit via Privy to BAO_TOKEN_ADDRESS
+!privy send-tx "$BAO_TOKEN_ADDRESS" "$CALLDATA"
 ```
 
 2. **Approve USDC** for premium:
@@ -448,7 +430,7 @@ CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BUR
 ```bash
 PREMIUM=$(cast to-wei "<premium_usdc>")
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$PREMIUM")
-# Submit via Privy to USDC_ADDRESS
+!privy send-tx "$USDC_ADDRESS" "$CALLDATA"
 ```
 
 3. **Buy put**:
@@ -456,13 +438,22 @@ CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$PREMIUM
 ```bash
 # Use the resolved pokemontcg.io ID, NOT the natural language name
 CALLDATA=$(cast calldata "buyPut(string,uint256)" "<resolved_card_id>" <durationDays>)
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 ### Step 5 — Confirm result
 
 - EN: "Put #[id] purchased. Your [name] ([card_id]) is protected at $[floor] for <days> days. [bao_burn] $BAO burned. If the price drops, report the new price with `!bao [name] report` then run `!bao [id] exercise`."
 - ZH: "期权 #[id] 已购买。你的 [name]（[card_id]）以 $[floor] 保护 <days> 天。已销毁 [bao_burn] $BAO。如果价格下跌，先用 `!bao [name] report` 报告新价格，然后运行 `!bao [id] exercise`。"
+
+## Workflow: `!bao <card name> quote <days>`
+
+Preview the premium for price protection without buying. Same as `put` Steps 1–3 but stops at the confirmation — no transaction, no approval, no $BAO burn.
+
+1. Resolve card and show image (same as put Step 1)
+2. Fetch on-chain median and call `quotePut` (same as put Step 2)
+3. Display the premium, floor price, BAO burn, net profit/break-even (same as put Step 3)
+4. End with: EN: "To buy this protection, run `!bao <name> put <days>`." / ZH: "如需购买此保护，运行 `!bao <name> put <days>`。"
 
 ## Workflow: `!bao <card name> price`
 
@@ -483,7 +474,7 @@ Extract TCGPlayer prices from the response. The `tcgplayer.prices` object contai
 
 ```bash
 cast call "$BAOCLAW_ADDRESS" "getMedianPrice(string)(uint256,uint256)" "<resolved_card_id>" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 ### Step 3 — Display combined price view
@@ -530,7 +521,7 @@ If on-chain count is 0 (no reports at all):
 
 ```bash
 cast call "$BAOCLAW_ADDRESS" "getPut(uint256)(address,string,uint256,uint256,uint256,bool)" <putId> \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 Then fetch current median price for the card.
@@ -544,9 +535,9 @@ Fetch the card details from pokemontcg.io using the card ID from the put. **Show
 The exerciser **must** have a fresh report for the card (skin in the game). Check:
 
 ```bash
-WALLET_ADDRESS=<get from Privy>
+WALLET_ADDRESS=$(!privy wallet-address)
 cast call "$BAOCLAW_ADDRESS" "getReport(string,address)(uint256,uint256,uint256)" "<card_id_from_put>" "$WALLET_ADDRESS" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 If the report timestamp is 0 or older than 24h, tell the user they must report first:
@@ -591,21 +582,21 @@ Edge cases:
 - If expired: EN: "This put expired on [date]." / ZH: "该期权已于 [date] 到期。"
 - If already exercised: EN: "This put has already been exercised." / ZH: "该期权已被行权。"
 
-### Step 5 — Execute via Privy
+### Step 5 — Execute
 
 No $BAO burn required on exercise — payouts must never be blocked.
 
 ```bash
 CALLDATA=$(cast calldata "exercisePut(uint256)" <putId>)
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 ## Workflow: `!bao puts`
 
 ```bash
-WALLET_ADDRESS=<get from Privy>
+WALLET_ADDRESS=$(!privy wallet-address)
 cast call "$BAOCLAW_ADDRESS" "getHolderPuts(address)(uint256[])" "$WALLET_ADDRESS" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 ```
 
 For each put ID, fetch details and display:
@@ -628,11 +619,11 @@ ID | 卡牌     | 保护价  | 权利金  | BAO 销毁   | 到期日     | 状�
 
 ```bash
 cast call "$BAOCLAW_ADDRESS" "poolBalance()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}"
+  --rpc-url "$RPC_URL"
 SHARE_PRICE=$(cast call "$BAOCLAW_ADDRESS" "sharePrice()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 TOTAL_SHARES=$(cast call "$BAOCLAW_ADDRESS" "totalShares()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 ```
 
 **English:**
@@ -661,7 +652,7 @@ If share price < 1.0: "LP 处于亏损状态 — 补偿金额超过权利金。"
 
 ```bash
 SHARE_PRICE=$(cast call "$BAOCLAW_ADDRESS" "sharePrice()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 ```
 
 Calculate: `shares_received ≈ amount / (sharePrice / 1e18)`
@@ -694,14 +685,14 @@ $BAO 销毁：<bao_burn> BAO（存款的 0.3%）
 
 Ask user to confirm.
 
-### Step 2 — Approve and fund via Privy
+### Step 2 — Approve and fund
 
 1. **Approve $BAO** for burn:
 
 ```bash
 BAO_BURN=$(cast to-wei "<amount * 0.003>")
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BURN")
-# Submit via Privy to BAO_TOKEN_ADDRESS
+!privy send-tx "$BAO_TOKEN_ADDRESS" "$CALLDATA"
 ```
 
 2. **Approve USDC**:
@@ -709,14 +700,14 @@ CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BUR
 ```bash
 AMOUNT=$(cast to-wei "<amount>")
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$AMOUNT")
-# Submit via Privy to USDC_ADDRESS
+!privy send-tx "$USDC_ADDRESS" "$CALLDATA"
 ```
 
 3. **Fund pool**:
 
 ```bash
 CALLDATA=$(cast calldata "fundPool(uint256)" "$AMOUNT")
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 - EN: "Deposited $[amount] USDC → [shares] LP shares. [bao_burn] $BAO burned."
@@ -728,7 +719,7 @@ CALLDATA=$(cast calldata "fundPool(uint256)" "$AMOUNT")
 
 ```bash
 SHARE_PRICE=$(cast call "$BAOCLAW_ADDRESS" "sharePrice()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 ```
 
 Calculate: `usdc_out = shares × (sharePrice / 1e18)`
@@ -761,17 +752,17 @@ $BAO 销毁：<bao_burn> BAO（提取金额的 0.3%）
 
 Ask user to confirm.
 
-### Step 2 — Approve $BAO for burn, then execute via Privy
+### Step 2 — Approve $BAO for burn, then execute
 
 ```bash
 # Approve 0.3% of withdrawal amount in $BAO
 BAO_BURN=$(cast to-wei "<usdc_out * 0.003>")
 CALLDATA=$(cast calldata "approve(address,uint256)" "$BAOCLAW_ADDRESS" "$BAO_BURN")
-# Submit via Privy to BAO_TOKEN_ADDRESS
+!privy send-tx "$BAO_TOKEN_ADDRESS" "$CALLDATA"
 
 SHARES=$(cast to-wei "<shares>")
 CALLDATA=$(cast calldata "withdrawPool(uint256)" "$SHARES")
-# Submit via Privy to BAOCLAW_ADDRESS
+!privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
 ```
 
 Burns 0.3% of withdrawn amount in $BAO.
@@ -782,11 +773,11 @@ Burns 0.3% of withdrawn amount in $BAO.
 ## Workflow: `!bao shares`
 
 ```bash
-WALLET_ADDRESS=<get from Privy>
+WALLET_ADDRESS=$(!privy wallet-address)
 MY_SHARES=$(cast call "$BAOCLAW_ADDRESS" "shares(address)(uint256)" "$WALLET_ADDRESS" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 SHARE_PRICE=$(cast call "$BAOCLAW_ADDRESS" "sharePrice()(uint256)" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 ```
 
 Calculate: `value = myShares × (sharePrice / 1e18)`
@@ -826,7 +817,7 @@ AMOUNTS=$(cast call "0x10ED43C718714eb63d5aA57B78B54704E256024E" \
   "getAmountsIn(uint256,address[])(uint256[])" \
   "$BAO_AMOUNT" \
   "[0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c,0x67777b71A41eebab7D3aD06498D9d48669025873]" \
-  --rpc-url "${RPC_URL:-https://bsc-dataseed.binance.org/}")
+  --rpc-url "$RPC_URL")
 ```
 
 The first value is the BNB required. Convert: `cast from-wei <bnb_amount>`.
@@ -855,10 +846,11 @@ Ask user to confirm. If user has insufficient BNB, tell them:
 - EN: "Insufficient BNB. You need at least [bnb_max] BNB."
 - ZH: "BNB 不足。你至少需要 [bnb_max] BNB。"
 
-### Step 3 — Execute swap via Privy
+### Step 3 — Execute swap
 
 ```bash
 BAO_AMOUNT=$(cast to-wei "<amount>")
+WALLET_ADDRESS=$(!privy wallet-address)
 DEADLINE=$(($(date +%s) + 300))  # 5 minutes
 
 CALLDATA=$(cast calldata \
@@ -868,22 +860,8 @@ CALLDATA=$(cast calldata \
   "$WALLET_ADDRESS" \
   "$DEADLINE")
 
-# Submit via Privy — include BNB value
-curl -s -X POST "https://auth.privy.io/api/v1/wallets/${PRIVY_WALLET_ID}/rpc" \
-  -H "Authorization: Bearer ${PRIVY_ACCESS_TOKEN}" \
-  -H "privy-app-id: ${PRIVY_APP_ID}" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"method\": \"eth_sendTransaction\",
-    \"params\": {
-      \"transaction\": {
-        \"to\": \"0x10ED43C718714eb63d5aA57B78B54704E256024E\",
-        \"data\": \"${CALLDATA}\",
-        \"value\": \"${BNB_MAX_WEI}\",
-        \"chain_id\": 56
-      }
-    }
-  }"
+# Delegate to Privy skill — include BNB value
+!privy send-tx "0x10ED43C718714eb63d5aA57B78B54704E256024E" "$CALLDATA" --value "$BNB_MAX_WEI"
 ```
 
 `swapETHForExactTokens` sends exact BNB as `value`, receives exact BAO amount. Any unused BNB is refunded automatically by the router.
@@ -1009,23 +987,98 @@ Found 3 matches for "Charizard ex":
 
 ## Guardrails
 
-- **NEVER** log, display, or store private keys or Privy secrets
-- **ALWAYS** show the card image before any put purchase, price report, or exercise — this is MANDATORY for visual verification
+- **NEVER** log, display, or store private keys or wallet secrets
+- **ALWAYS** show the card image before any put purchase, price report, or exercise when interacting with a human user — this is MANDATORY for visual verification
 - **ALWAYS** show premium cost, $BAO burn, and floor price before buying
-- **ALWAYS** confirm before any transaction
+- **ALWAYS** confirm before any transaction when interacting with a human user
 - **NEVER** approve unlimited token amounts — approve exact amounts only
 - **ALWAYS** resolve natural language card names to pokemontcg.io IDs before on-chain calls
 - If multiple card matches are found, show them with images and ask user to pick
-- **ALWAYS** call `quotePut` before `buyPut` to show the user the protocol-computed premium
-- **ALWAYS** call `quoteBond` before `reportPrice` to show the user the bond amount (1% of price, min 10 USDC)
+- **ALWAYS** call `quotePut` before `buyPut` to show the protocol-computed premium
+- **ALWAYS** call `quoteBond` before `reportPrice` to show the bond amount (1% of price, min 10 USDC)
 - If no fresh price (< 3 reports), explain that more reporters are needed and suggest `!bao <card name> report`
 - When exercising, check that the user has a fresh report first. If not, guide them to report
 - When exercising, show the full payout calculation
 - If user has insufficient $BAO, suggest `!bao buy <amount>` to purchase via PancakeSwap
 - For `!bao buy`, always use 1% slippage and a 5-minute deadline
-- For `!bao buy`, show the BNB cost and confirm before executing
 - For `!bao report`, show all available price sources and the median before confirming
-- The pokemontcg.io API key lives on the user's machine — never transmit it elsewhere
+- The pokemontcg.io API key is per-user — never transmit it elsewhere
+- All transaction signing is delegated to the Privy skill — never handle keys directly
+
+## Agent-Scale Usage
+
+BaoClaw is designed to be used by autonomous agents at scale — not only human users. When the caller is an agent (another skill, a bot, or a programmatic pipeline), the following adaptations apply:
+
+### Caller detection
+
+If the caller provides structured input (e.g., a card ID instead of a natural language name, or a JSON payload), treat it as an agent call. Agent calls skip image display and confirmation prompts.
+
+### Autonomous reporting
+
+Agents can report prices for multiple cards in a loop. For each card:
+
+```bash
+# Resolve card → get TCGPlayer price → report
+for CARD_ID in "sv1-4" "swsh4-44" "neo1-9"; do
+  PRICE=$(curl -s "https://api.pokemontcg.io/v2/cards/${CARD_ID}" \
+    -H "X-Api-Key: ${POKEMONTCG_API_KEY:-}" | jq -r '.data.tcgplayer.prices | to_entries[0].value.market // empty')
+  if [ -n "$PRICE" ]; then
+    PRICE_WEI=$(cast to-wei "$PRICE")
+    BOND=$(cast call "$BAOCLAW_ADDRESS" "quoteBond(uint256)(uint256)" "$PRICE_WEI" --rpc-url "$RPC_URL")
+    # Approve BAO, approve USDC, report — all via Privy skill
+    CALLDATA=$(cast calldata "reportPrice(string,uint256)" "$CARD_ID" "$PRICE_WEI")
+    !privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
+  fi
+done
+```
+
+### Batch expired put cleanup
+
+Agents can maintain pool health by cleaning expired puts:
+
+```bash
+EXPIRED=$(cast call "$BAOCLAW_ADDRESS" "getExpiredPuts(uint256,uint256)(uint256[])" 0 1000 --rpc-url "$RPC_URL")
+if [ "$EXPIRED" != "[]" ]; then
+  CALLDATA=$(cast calldata "cleanExpiredPuts(uint256[])" "$EXPIRED")
+  !privy send-tx "$BAOCLAW_ADDRESS" "$CALLDATA"
+fi
+```
+
+### Structured output for agent consumers
+
+When responding to agent callers, return structured data instead of prose:
+
+```json
+{
+  "action": "report",
+  "cardId": "sv1-4",
+  "price": 499.00,
+  "bond": 10.00,
+  "baoBurn": 0.03,
+  "txHash": "0x...",
+  "sources": {"tcgplayer": 502, "pricecharting": 495, "ebay": 498}
+}
+```
+
+### Pool monitoring
+
+Agents can monitor pool utilization and act as LPs:
+
+```bash
+UTIL=$(cast call "$BAOCLAW_ADDRESS" "getUtilization()(uint256)" --rpc-url "$RPC_URL")
+# Utilization in bps: 7000 = 70%. Above kink → premiums rise → good time to LP
+# Below kink → premiums low → consider withdrawing
+```
+
+### Key agent use cases
+
+| Agent Role | What it does | Key functions |
+|---|---|---|
+| **Reporter bot** | Scrapes prices, reports for active cards | `reportPrice`, `claimBond`, `claimRewards` |
+| **Arbitrage bot** | Monitors puts, exercises when profitable | `getExpiredPuts`, `exercisePut`, `getMedianPrice` |
+| **LP manager** | Funds/withdraws based on utilization | `getUtilization`, `fundPool`, `withdrawPool`, `sharePrice` |
+| **Cleanup bot** | Cleans expired puts to reduce utilization | `getExpiredPuts`, `cleanExpiredPuts` |
+| **Price oracle** | Provides price feeds to other agents | `getMedianPrice`, `hasFreshPrice` |
 
 ## Examples
 
