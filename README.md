@@ -31,15 +31,15 @@ Four roles, one contract:
 
 BaoClaw runs on [OpenClaw](https://github.com/openclaw) — an AI agent framework. All interactions happen through the `!bao` command in any OpenClaw-enabled chat. No dApp, no website, no MetaMask. Just type commands.
 
-### Step 1 — Authenticate with Privy
+### Step 1 — Authenticate
 
-When you first use `!bao`, OpenClaw creates an **embedded wallet** for you via [Privy](https://privy.io). You sign in with your email, Google, or Twitter account — Privy generates a wallet on BSC behind the scenes.
+When you first use `!bao`, OpenClaw creates an **embedded wallet** for you via the Privy skill. You sign in with your email, Google, or Twitter account — a wallet is generated on BSC behind the scenes.
 
-No seed phrases. No browser extensions. Your wallet lives in Privy's secure infrastructure and signs transactions on your behalf.
+No seed phrases. No browser extensions. No Privy configuration needed — BaoClaw delegates all wallet management to OpenClaw's Privy skill.
 
 ### Step 2 — Get BNB for gas
 
-Your Privy wallet needs a small amount of BNB to pay for transaction fees on BSC. Send BNB to your Privy wallet address from any exchange (Binance, Coinbase, etc.) or another wallet.
+Your wallet needs a small amount of BNB to pay for transaction fees on BSC. Send BNB to your wallet address from any exchange (Binance, Coinbase, etc.) or another wallet.
 
 To check your wallet address:
 
@@ -51,7 +51,7 @@ The response will show your wallet address and current holdings.
 
 ### Step 3 — Buy $BAO
 
-Every BaoClaw operation (except exercising puts) burns 0.3% of the USDC amount in $BAO tokens. You need $BAO in your wallet before you can buy puts, provide liquidity, or report prices.
+Every BaoClaw operation (except exercising puts) burns $BAO tokens: 0.3% of the premium (for puts), deposit/withdrawal amount (for LPs), or bond (for reporters). You need $BAO in your wallet before you can buy puts, provide liquidity, or report prices.
 
 Buy $BAO directly through OpenClaw:
 
@@ -67,7 +67,7 @@ $BAO token: [`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com/t
 
 ### Step 4 — Get USDC
 
-You need USDC on BSC to pay premiums, provide liquidity, or post reporter bonds. Bridge or purchase USDC from any exchange and send it to your Privy wallet address.
+You need USDC on BSC to pay premiums, provide liquidity, or post reporter bonds. Bridge or purchase USDC from any exchange and send it to your wallet address.
 
 ### Step 5 — Use BaoClaw
 
@@ -198,7 +198,7 @@ The share price is the single number that tells LPs everything: above $1.00 = pr
 
 ### $BAO Burn
 
-Three operations burn 0.3% of the USDC amount in $BAO tokens (true burn via `burnFrom` — permanently reduces `totalSupply`): `buyPut`, `fundPool`, and `withdrawPool`. Reporting burns 0.3% of the bond amount. Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
+Every write operation burns $BAO tokens (true burn via `burnFrom` — permanently reduces `totalSupply`): buying puts burns 0.3% of the premium, funding/withdrawing the pool burns 0.3% of the USDC amount, and reporting prices burns 0.3% of the bond. Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
 
 Additionally, **10% of every put premium** is distributed equally to honest fresh reporters as claimable rewards. This incentivizes active price reporting on cards with put markets.
 
@@ -274,10 +274,13 @@ Pool (LP):
 Token:
   !bao buy <amount>              Buy $BAO with BNB via PancakeSwap
 
+Search:
+  !bao search <card name>        Search for a card (show matches with images)
+
   !bao help                      Show commands
 ```
 
-Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `sv1-4`, `base1-4`, `neo1-9`).
+Cards can be specified by natural language name (e.g., "Charizard ex Scarlet Violet") or by pokemontcg.io ID (`sv1-4`, `base1-4`, `neo1-9`).
 
 ## Protocol Constants
 
@@ -292,7 +295,7 @@ Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `s
 | Report bond | max(10 USDC, 1% of reported price) |
 | Min reports for canonical price | 3 |
 | Outlier threshold | 10% from median |
-| $BAO burn rate | 0.3% of USDC amount on buyPut, fundPool, withdrawPool, report (true burn) |
+| $BAO burn rate | 0.3% of premium/deposit/withdrawal/bond (true burn via `burnFrom`) |
 | Reporter reward | 10% of put premium split equally among honest fresh reporters |
 | Chain | Binance Smart Chain (56) |
 | Settlement token | USDC |
@@ -330,10 +333,14 @@ Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `s
                            │ reports prices / buys puts / provides liquidity
                            │
                   ┌────────┴────────┐
-                  │  Users (Privy)  │
+                  │  OpenClaw Agent │
                   │  via !bao       │
                   │                 │
+                  │  Privy skill    │
+                  │  → wallet mgmt  │
+                  │                 │
                   │  Reporters:     │
+                  │   pokemontcg.io │
                   │   PriceCharting │
                   │   TCGPlayer     │
                   │   eBay Sold     │
@@ -380,7 +387,8 @@ forge test -v
 
 ```bash
 cp .env.example .env
-# Fill in USDC_ADDRESS, BAO_TOKEN_ADDRESS
+# USDC and $BAO addresses are hardcoded (BSC mainnet)
+# Set PRIVATE_KEY and SEEDER_ADDRESS
 
 source .env
 forge script scripts/Deploy.s.sol:DeployBaoClaw \
@@ -468,10 +476,12 @@ baoclaw/
 - [x] Crowdsourced reporter pricing (bond + median + slash)
 - [x] $BAO burn mechanism (0.3% of premium)
 - [x] LP shares with proportional withdrawal
-- [x] OpenClaw skill (Privy wallets)
+- [x] OpenClaw skill (Privy delegation)
 - [x] CLI tooling
 - [x] Pool utilization cap — limit total put exposure to a percentage of pool balance
 - [x] Variable duration — 1–30 day puts with √time × utilization kink premium
+- [x] Agent-scale design — batch reporting, cleanup bots, LP managers, structured output
+- [x] Hardcoded BSC addresses — zero user-set environment variables
 - [ ] Mainnet deployment + audit
 - [ ] Expand tracked cards (50+ high-value Pokemon TCG cards)
 - [ ] Cross-chain (Base, Arbitrum)
@@ -507,15 +517,15 @@ BaoClaw 是一个宝可梦卡牌的**看跌期权协议**。无所有者、无�
 
 BaoClaw 运行在 [OpenClaw](https://github.com/openclaw) 上 — 一个 AI 代理框架。所有操作通过 `!bao` 命令在任何支持 OpenClaw 的聊天中完成。无需 dApp、无需网站、无需 MetaMask。只需输入命令。
 
-### 第 1 步 — 通过 Privy 认证
+### 第 1 步 — 认证
 
-首次使用 `!bao` 时，OpenClaw 会通过 [Privy](https://privy.io) 为你创建一个**内嵌钱包**。你可以用邮箱、Google 或 Twitter 账户登录 — Privy 会在后台自动生成一个 BSC 钱包。
+首次使用 `!bao` 时，OpenClaw 会通过 Privy 技能为你创建一个**内嵌钱包**。你可以用邮箱、Google 或 Twitter 账户登录 — 系统会在后台自动生成一个 BSC 钱包。
 
-无需助记词。无需浏览器插件。你的钱包存储在 Privy 的安全基础设施中，代替你签署交易。
+无需助记词。无需浏览器插件。无需 Privy 配置 — BaoClaw 将所有钱包管理委托给 OpenClaw 的 Privy 技能。
 
 ### 第 2 步 — 获取 BNB 作为 Gas 费
 
-你的 Privy 钱包需要少量 BNB 来支付 BSC 上的交易手续费。从任何交易所（币安、Coinbase 等）或其他钱包向你的 Privy 钱包地址发送 BNB。
+你的钱包需要少量 BNB 来支付 BSC 上的交易手续费。从任何交易所（币安、Coinbase 等）或其他钱包向你的钱包地址发送 BNB。
 
 查看你的钱包地址：
 
@@ -527,7 +537,7 @@ BaoClaw 运行在 [OpenClaw](https://github.com/openclaw) 上 — 一个 AI 代�
 
 ### 第 3 步 — 购买 $BAO
 
-每次 BaoClaw 操作（行权除外）都会销毁 USDC 金额 0.3% 的 $BAO 代币。在购买期权、提供流动性或报价之前，你的钱包中需要有 $BAO。
+每次 BaoClaw 操作（行权除外）都会销毁 $BAO 代币：购买期权销毁权利金的 0.3%，存入/提取资金池销毁金额的 0.3%，报价销毁保证金的 0.3%。在操作之前，你的钱包中需要有 $BAO。
 
 通过 OpenClaw 直接购买 $BAO：
 
@@ -543,7 +553,7 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 
 ### 第 4 步 — 获取 USDC
 
-你需要 BSC 上的 USDC 来支付权利金、提供流动性或提交报价保证金。从任何交易所购买或跨链 USDC，然后发送到你的 Privy 钱包地址。
+你需要 BSC 上的 USDC 来支付权利金、提供流动性或提交报价保证金。从任何交易所购买或跨链 USDC，然后发送到你的钱包地址。
 
 ### 第 5 步 — 使用 BaoClaw
 
@@ -674,7 +684,7 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 
 ### $BAO 销毁
 
-三种操作会销毁 USDC 金额 0.3% 的 $BAO 代币（通过 `burnFrom` 真正销毁 — 永久减少 `totalSupply`）：`buyPut`、`fundPool` 和 `withdrawPool`。报价操作销毁保证金金额的 0.3%。行权（exercisePut）**不会**销毁 — 补偿金额绝不能因为缺少 $BAO 而被阻止。
+每种写操作都会销毁 $BAO 代币（通过 `burnFrom` 真正销毁 — 永久减少 `totalSupply`）：购买期权销毁权利金的 0.3%，存入/提取资金池销毁 USDC 金额的 0.3%，报价销毁保证金的 0.3%。行权（exercisePut）**不会**销毁 — 补偿金额绝不能因为缺少 $BAO 而被阻止。
 
 此外，**每笔权利金的 10%** 会平均分配给诚实的新鲜报价者作为可领取的奖励。这激励报价者积极为有期权市场的卡牌报价。
 
@@ -750,10 +760,13 @@ BaoClaw 是一个 [OpenClaw](https://github.com/openclaw) 技能。所有交互�
 代币：
   !bao buy <数量>                用 BNB 通过 PancakeSwap 购买 $BAO
 
+搜索：
+  !bao search <卡牌名称>         搜索卡牌（显示匹配结果和图片）
+
   !bao help                      显示命令
 ```
 
-卡牌 ID 使用宝可梦 TCG 标准格式：`{系列代码}-{卡牌编号}`（例如 `sv1-4`、`base1-4`、`neo1-9`）。
+卡牌可以通过自然语言名称（如"喷火龙 ex 朱与紫"）或 pokemontcg.io ID（`sv1-4`、`base1-4`、`neo1-9`）指定。
 
 ## 协议常量
 
@@ -768,7 +781,7 @@ BaoClaw 是一个 [OpenClaw](https://github.com/openclaw) 技能。所有交互�
 | 报价保证金 | max(10 USDC, 报价价格的 1%) |
 | 最低报价数量 | 3 |
 | 异常值阈值 | 偏离中位数 10% |
-| $BAO 销毁率 | buyPut、fundPool、withdrawPool、report 时 USDC 金额的 0.3%（真正销毁） |
+| $BAO 销毁率 | 权利金/存款/提取/保证金的 0.3%（通过 `burnFrom` 真正销毁） |
 | 报价奖励 | 权利金的 10% 平均分配给诚实的新鲜报价者 |
 | 链 | 币安智能链 (56) |
 | 结算代币 | USDC |
