@@ -14,7 +14,7 @@ Price protection for Pokemon TCG cards. Put options settled in USDC on Binance S
 
 ## What is BaoClaw?
 
-You own a $500 Charizard. You're worried the market tanks. You pay a small premium, and if the price drops below $500 within 90 days, you claim the difference from the pool. If it doesn't, the pool keeps your premium.
+You own a $500 Charizard. You're worried the market tanks. You pay a protocol-computed premium (based on √time × utilization), and if the price drops below $500 within 1-30 days, you claim the difference from the pool. If it doesn't, the pool keeps your premium.
 
 BaoClaw is a **put option protocol** for Pokemon TCG cards. No owner. No governance. No oracle. Prices are crowdsourced by reporters who post bonds and submit prices. Median of N reports = canonical price. Outliers get slashed.
 
@@ -24,7 +24,8 @@ Four roles, one contract:
 |---|---|---|---|
 | **Put buyer** | Buys price protection on a card | Premium in USDC + 0.3% of premium in $BAO (burned) | Payout if price drops below floor |
 | **Liquidity provider** | Deposits USDC into the pool, receives LP shares | USDC + 0.3% of deposit in $BAO (burned) | Premium income — withdraw more than you deposited |
-| **Reporter** | Reports card prices on-chain by scraping PriceCharting, TCGPlayer, eBay Sold | 10 USDC bond per report + 0.3% of bond in $BAO (burned) | Bond refunded on next report or after 24h; outlier reporters lose their bond |
+| **Reporter** | Reports card prices on-chain by scraping PriceCharting, TCGPlayer, eBay Sold | USDC bond per report (1% of price, min 10 USDC) + 0.3% of bond in $BAO (burned) | Bond refunded on next report or after 24h; 10% of put premiums shared as rewards; outlier reporters lose their bond |
+| **Seeder** | Bootstraps initial prices without posting bond (contract deployer sets this address) | Nothing (bond-free) | Earns reporter rewards like any other honest reporter |
 
 ## Getting Started
 
@@ -78,15 +79,15 @@ You're ready. Pick what you want to do:
 !bao report sv1-4
 ```
 
-The agent scrapes PriceCharting, TCGPlayer, and eBay Sold listings, calculates a price, and submits it on-chain with a 10 USDC bond. Your bond is refunded on your next report or after 24 hours — unless your price is an outlier (>10% from the median), in which case your bond is slashed to the pool.
+The agent scrapes PriceCharting, TCGPlayer, and eBay Sold listings, calculates a price, and submits it on-chain with a proportional USDC bond (1% of the reported price, minimum 10 USDC). Your bond is refunded on your next report or after 24 hours — unless your price is an outlier (>10% from the median), in which case your bond is slashed to the pool.
 
 **Protect a card's value:**
 
 ```
-!bao sv1-4 put 5
+!bao Charizard ex Scarlet Violet put 14
 ```
 
-The agent fetches the current median reporter price, calculates premium and $BAO burn, and asks you to confirm. Three transactions are signed automatically: approve $BAO, approve USDC, buy put.
+The agent fetches the current median reporter price, calculates the protocol-computed premium (based on √time × utilization), and asks you to confirm. Three transactions are signed automatically: approve $BAO, approve USDC, buy put.
 
 **Provide liquidity and earn premiums:**
 
@@ -115,20 +116,20 @@ Deposits USDC into the pool. You receive LP shares. As put buyers pay premiums, 
 > !bao sv1-4 price                     # Check Charizard ex price
   "sv1-4 (Charizard ex): $487.50 USDC (median of 4 reports)"
 
-> !bao report sv1-4                    # Report price (10 USDC bond)
-  "Scraped: PriceCharting $490, TCGPlayer $485, eBay Sold $488. Submitting $488. Bond: 10 USDC. Proceed?"
+> !bao report sv1-4                    # Report price (proportional bond)
+  "Scraped: PriceCharting $490, TCGPlayer $485, eBay Sold $488. Submitting $488. Bond: 10 USDC (1% of $488, min $10). Proceed?"
 > yes
   "Report submitted. Bond: 10 USDC (refundable after 24h or on next report)."
 
-> !bao sv1-4 put 5                     # Protect at $487.50 for 90 days
-  "Premium: 5% = $24.38 USDC. $BAO burn: 0.073 BAO. Proceed?"
+> !bao Charizard ex Scarlet Violet put 14  # Protect at $487.50 for 14 days
+  "Premium: $37.42 USDC (protocol-computed). $BAO burn: 0.112 BAO. Proceed?"
 > yes
-  "Put #0 purchased. Protected at $487.50 for 90 days."
+  "Put #0 purchased. Protected at $487.50 for 14 days."
 
   ... 45 days later, price drops to $300 ...
 
 > !bao report sv1-4                    # Must report before exercising
-  "Scraped: PriceCharting $305, TCGPlayer $298, eBay Sold $297. Submitting $300. Bond: 10 USDC. Proceed?"
+  "Scraped: PriceCharting $305, TCGPlayer $298, eBay Sold $297. Submitting $300. Bond: 10 USDC (1% of $300, min $10). Proceed?"
 > yes
   "Report submitted."
 
@@ -143,23 +144,25 @@ Deposits USDC into the pool. You receive LP shares. As put buyers pay premiums, 
 ### Buying a Put
 
 ```
-!bao sv1-4 put 5
+!bao Charizard ex Scarlet Violet put 14
 ```
 
 1. Median reporter price for sv1-4 (Charizard ex): **$500 USDC**
-2. Premium: 5% = **$25 USDC** paid to the pool
-3. $BAO burn: 0.3% of premium = **0.075 BAO** sent to 0xdEaD
-4. Floor locked at **$500** for **90 days**
+2. Premium: **$37.42 USDC** (protocol-computed via √time × utilization) paid to the pool
+3. $BAO burn: 0.3% of premium = **0.112 BAO** burned (permanently reduces totalSupply)
+4. Floor locked at **$500** for **14 days**
 
-If the price drops to $300 within 90 days:
+If the price drops to $300 within 14 days:
 
 ```
 !bao 0 exercise
 ```
 
-Payout: $500 - $300 = **$200 USDC** from the pool. Net profit after premium: **$175**.
+Payout: $500 - $300 = **$200 USDC** from the pool. Net profit after premium: **$162.58**.
 
-If the price stays above $500, the put expires worthless. The pool keeps the $25 premium.
+If the price stays above $500, the put expires worthless. The pool keeps the $37.42 premium.
+
+**Automatic cleanup:** Expired puts are automatically cleaned during `buyPut` and `withdrawPool` operations (up to 5 per call), so the pool stays healthy without manual intervention. A `cleanExpiredPuts` function also exists for manual batch cleanup.
 
 ### Providing Liquidity
 
@@ -195,7 +198,9 @@ The share price is the single number that tells LPs everything: above $1.00 = pr
 
 ### $BAO Burn
 
-Three operations burn 0.3% of the USDC amount in $BAO tokens (sent to `0xdEaD`): `buyPut`, `fundPool`, and `withdrawPool`. Reporting burns 0.3% of the bond amount. Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
+Three operations burn 0.3% of the USDC amount in $BAO tokens (true burn via `burnFrom` — permanently reduces `totalSupply`): `buyPut`, `fundPool`, and `withdrawPool`. Reporting burns 0.3% of the bond amount. Exercising a put does **not** burn — payouts must never be blocked by missing $BAO.
+
+Additionally, **10% of every put premium** is distributed equally to honest fresh reporters as claimable rewards. This incentivizes active price reporting on cards with put markets.
 
 ```
 More puts bought → more $BAO burned → lower supply → higher $BAO price
@@ -207,7 +212,7 @@ More puts bought → more $BAO burned → lower supply → higher $BAO price
 | Buy put ($500 card, 5% premium) | $25 USDC | 0.075 BAO |
 | Buy put ($500 card, 10% premium) | $50 USDC | 0.15 BAO |
 | Exercise put ($200 payout) | $200 USDC | None (no burn) |
-| Report a price (10 USDC bond) | $10 USDC | 0.03 BAO |
+| Report a price (bond = max(10, 1% of price)) | Bond (scales with price) | 0.3% of bond |
 | Deposit $1,000 to pool | $1,000 USDC | 3 BAO |
 | Withdraw $1,000 from pool | $1,000 USDC | 3 BAO |
 
@@ -215,13 +220,13 @@ More puts bought → more $BAO burned → lower supply → higher $BAO price
 
 ### Crowdsourced Pricing
 
-There is no oracle. Anyone can be a reporter by posting a **10 USDC bond** and submitting a price for any tracked card. Reporters scrape prices from three verifiable public sources: [PriceCharting](https://www.pricecharting.com/), [TCGPlayer](https://www.tcgplayer.com/), and eBay Sold listings.
+There is no oracle. Anyone can be a reporter by posting a **USDC bond** (1% of reported price, minimum 10 USDC) and submitting a price for any tracked card. Reporters scrape prices from three verifiable public sources: [PriceCharting](https://www.pricecharting.com/), [TCGPlayer](https://www.tcgplayer.com/), and eBay Sold listings.
 
 **How it works:**
 
-1. A reporter calls `!bao report <cardId>` — the agent scrapes the three sources, computes a price, and submits it on-chain with a 10 USDC bond.
+1. A reporter calls `!bao report <cardId>` — the agent scrapes the three sources, computes a price, and submits it on-chain with a proportional USDC bond (1% of reported price, minimum 10 USDC).
 2. When **3 or more fresh reports** (within the last 24 hours) exist for a card, the **median** of those reports becomes the canonical price used for puts and exercises.
-3. If a reporter's submitted price is an **outlier** (more than 10% away from the median), their 10 USDC bond is **slashed** and sent to the pool.
+3. If a reporter's submitted price is an **outlier** (more than 10% away from the median), their bond is **slashed** and sent to the pool.
 4. Honest reporters get their bond **refunded** when they submit their next report, or they can claim it back after 24 hours via `!bao claim-bond <cardId>`.
 
 **Why this works (Schelling point):** The truth is the natural convergence point because all three data sources (PriceCharting, TCGPlayer, eBay Sold) are publicly verifiable. Rational reporters have no incentive to lie — submitting an outlier price means losing your bond. You only need to trust that a majority of reporters are honest, which is the economically rational strategy.
@@ -247,16 +252,18 @@ BaoClaw is an [OpenClaw](https://github.com/openclaw) skill. All interactions ha
 
 ```
 Put Options:
-  !bao <cardId> put <premium%>   Buy price protection
-  !bao <cardId> price            Check current median reporter price
+  !bao <card name> put <days>    Buy price protection (1–30 days)
+  !bao <card name> quote <days>  Preview premium before buying
+  !bao <card name> price          Check market price + on-chain median (free)
   !bao <putId> exercise          Exercise a put (claim payout)
   !bao puts                      List my active puts
 
 Reporting:
-  !bao report <cardId>           Report a card's price (posts 10 USDC bond)
+  !bao report <cardId>           Report a card's price (posts proportional USDC bond)
   !bao report-info <cardId>      View current reports and median for a card
   !bao reporters                 List active reporters
   !bao claim-bond <cardId>       Claim back your bond after 24h
+  !bao claim-rewards             Claim accumulated reporter rewards
 
 Pool (LP):
   !bao pool                      Pool balance and share price
@@ -276,13 +283,17 @@ Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `s
 
 | Parameter | Value |
 |---|---|
-| Minimum premium | 3% of floor price |
-| Put duration | 90 days |
+| Premium model | √time × utilization kink (protocol-computed) |
+| Base rate | 2% |
+| Utilization kink | 70% |
+| Max utilization | 95% |
+| Put duration | 1–30 days |
 | Price staleness threshold | 24 hours |
-| Report bond | 10 USDC |
+| Report bond | max(10 USDC, 1% of reported price) |
 | Min reports for canonical price | 3 |
 | Outlier threshold | 10% from median |
-| $BAO burn rate | 0.3% of USDC amount on buyPut, fundPool, withdrawPool, report |
+| $BAO burn rate | 0.3% of USDC amount on buyPut, fundPool, withdrawPool, report (true burn) |
+| Reporter reward | 10% of put premium split equally among honest fresh reporters |
 | Chain | Binance Smart Chain (56) |
 | Settlement token | USDC |
 
@@ -294,13 +305,14 @@ Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `s
 │                                                     │
 │  Immutables (set once, never change):               │
 │    usdc        → USDC token on BSC                  │
-│    baoToken    → $BAO token (burned on use)         │
+│    baoToken    → $BAO token (true burn on use)      │
+│    seeder      → bootstrap reporter (no bond)       │
 │                                                     │
 │  Crowdsourced Pricing:                              │
 │    reports[cardHash][reporter] → Report struct       │
 │    reportCount[cardHash]       → # fresh reports     │
 │    medianPrice[cardHash]       → canonical price     │
-│    bonds[reporter][cardHash]   → 10 USDC bond        │
+│    bonds[reporter][cardHash]   → USDC bond            │
 │                                                     │
 │  Puts:                                              │
 │    puts[putId]           → Put struct               │
@@ -309,6 +321,7 @@ Card IDs use the Pokemon TCG standard format: `{setCode}-{cardNumber}` (e.g., `s
 │  Pool:                                              │
 │    poolBalance           → total USDC available     │
 │    totalShares           → total LP shares          │
+│    totalExposure         → sum of active put floors  │
 │    shares[address]       → LP shares per funder     │
 │                                                     │
 │  No owner. No admin. No upgrade path. No oracle.    │
@@ -340,11 +353,11 @@ BaoClaw has **no single trusted entity**. Trust is distributed across crowdsourc
 | Contract logic | No | Open source, auditable, immutable |
 | Pool funds | No | LPs can withdraw proportionally anytime |
 | Crowdsourced pricing | **Distributed** | You only need to trust that a majority of reporters are honest. Schelling point: truth is the natural convergence since prices come from 3 verifiable public sources (PriceCharting, TCGPlayer, eBay Sold). Outliers get slashed. |
-| $BAO burn | No | Transfer to 0xdEaD is irreversible |
+| $BAO burn | No | True burn via `burnFrom` reduces totalSupply — irreversible |
 | Put settlement | No | Math is on-chain: `payout = floor - current` |
 | LP shares | No | Proportional math: `payout = shares × poolBalance / totalShares` |
 
-If a majority of reporters collude to post false prices, incorrect payouts could occur. This is mitigated by the economic incentive: colluding reporters must each risk 10 USDC per report, and honest reporters can always submit correct prices to push the median back toward truth. No funds can be drained — the contract only pays `floor - current`, and the pool can't go negative.
+If a majority of reporters collude to post false prices, incorrect payouts could occur. This is mitigated by the economic incentive: colluding reporters must each risk a bond proportional to the reported price (1% of price, min 10 USDC), and honest reporters can always submit correct prices to push the median back toward truth. No funds can be drained — the contract only pays `floor - current`, and the pool can't go negative.
 
 ## Development
 
@@ -361,7 +374,7 @@ forge build
 forge test -v
 ```
 
-57 tests covering: crowdsourced reporter operations, bond posting/refund/slashing, median price calculation, outlier detection, put lifecycle, exercise edge cases, $BAO burn mechanics, LP share minting/withdrawal/pricing, multi-LP scenarios, pool profit/loss propagation, immutability checks, and full lifecycle scenarios.
+115 tests covering: crowdsourced reporter operations, proportional bond posting/refund/slashing, median price calculation, outlier detection, put lifecycle, exercise edge cases, amortized expired put cleanup, true $BAO burn (reduces totalSupply), seeder bootstrapping, reporter rewards (10% of premium), LP share minting/withdrawal/pricing, multi-LP scenarios, pool profit/loss propagation, immutability checks, √time × utilization premium model, variable duration, pool utilization caps, and full lifecycle scenarios.
 
 ### Deploy
 
@@ -393,16 +406,25 @@ source .env
 # Claim bond back
 ./scripts/baoclaw-cli.sh claim-bond sv1-4
 
-# Check price
+# Check on-chain median price
 ./scripts/baoclaw-cli.sh price sv1-4
+
+# Check market price from TCGPlayer (no on-chain interaction)
+./scripts/baoclaw-cli.sh market-price "Charizard ex"
 
 # Check if price is fresh
 ./scripts/baoclaw-cli.sh fresh sv1-4
 
-# Approve tokens and buy a put
+# Quote a premium (preview before buying)
+./scripts/baoclaw-cli.sh quote sv1-4 14
+
+# Quote the reporter bond for a given price
+./scripts/baoclaw-cli.sh quote-bond 488
+
+# Approve tokens and buy a put (14 days)
 ./scripts/baoclaw-cli.sh approve-bao 2.5
-./scripts/baoclaw-cli.sh approve-usdc 25
-./scripts/baoclaw-cli.sh buy-put sv1-4 500
+./scripts/baoclaw-cli.sh approve-usdc 40
+./scripts/baoclaw-cli.sh buy-put sv1-4 14
 
 # Exercise
 ./scripts/baoclaw-cli.sh exercise 0
@@ -429,7 +451,7 @@ baoclaw/
 ├── src/
 │   └── BaoClaw.sol              # Core contract (puts + LP pool + crowdsourced pricing)
 ├── test/
-│   └── BaoClaw.t.sol            # 57 tests
+│   └── BaoClaw.t.sol            # 115 tests
 ├── scripts/
 │   ├── Deploy.s.sol             # Foundry deploy script
 │   └── baoclaw-cli.sh           # CLI wrapper using cast
@@ -448,8 +470,8 @@ baoclaw/
 - [x] LP shares with proportional withdrawal
 - [x] OpenClaw skill (Privy wallets)
 - [x] CLI tooling
-- [ ] Pool utilization cap — limit total put exposure to a percentage of pool balance
-- [ ] Variable duration — 30/60/90 day puts with premium scaling
+- [x] Pool utilization cap — limit total put exposure to a percentage of pool balance
+- [x] Variable duration — 1–30 day puts with √time × utilization kink premium
 - [ ] Mainnet deployment + audit
 - [ ] Expand tracked cards (50+ high-value Pokemon TCG cards)
 - [ ] Cross-chain (Base, Arbitrum)
@@ -468,7 +490,7 @@ MIT
 
 ## BaoClaw 是什么？
 
-你有一张价值 $500 的喷火龙卡。你担心市场下跌。你支付一笔小额权利金，如果价格在 90 天内跌破 $500，你可以从资金池中获得差价补偿。如果没有跌破，资金池保留你的权利金。
+你有一张价值 $500 的喷火龙卡。你担心市场下跌。你支付一笔协议计算的权利金（基于 √时间 × 利用率），如果价格在 1-30 天内跌破 $500，你可以从资金池中获得差价补偿。如果没有跌破，资金池保留你的权利金。
 
 BaoClaw 是一个宝可梦卡牌的**看跌期权协议**。无所有者、无治理、无预言机。价格由报价者众包提供：报价者提交保证金并上报价格。N 个报价的中位数 = 标准价格。异常值会被罚没。
 
@@ -478,7 +500,8 @@ BaoClaw 是一个宝可梦卡牌的**看跌期权协议**。无所有者、无�
 |---|---|---|---|
 | **期权买方** | 购买卡牌价格保护 | USDC 权利金 + 权利金的 0.3% $BAO（销毁） | 价格下跌时获得补偿 |
 | **流动性提供者** | 向资金池存入 USDC，获得 LP 份额 | USDC + 存款的 0.3% $BAO（销毁） | 权利金收入 — 提取时比存入更多 |
-| **报价者** | 通过抓取 PriceCharting、TCGPlayer、eBay 已售数据将卡牌价格上链 | 每次报价 10 USDC 保证金 + 保证金的 0.3% $BAO（销毁） | 下次报价时或 24 小时后退还保证金；异常报价者的保证金被罚没 |
+| **报价者** | 通过抓取 PriceCharting、TCGPlayer、eBay 已售数据将卡牌价格上链 | 每次报价 USDC 保证金（价格的 1%，最低 10 USDC）+ 保证金的 0.3% $BAO（销毁） | 下次报价时或 24 小时后退还保证金；获得权利金 10% 的奖励；异常报价者的保证金被罚没 |
+| **种子报价者** | 无需保证金即可引导初始价格（合约部署者设定） | 无（免保证金） | 与其他诚实报价者一样获得报价奖励 |
 
 ## 新手入门
 
@@ -532,15 +555,15 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 !bao report sv1-4
 ```
 
-代理会抓取 PriceCharting、TCGPlayer 和 eBay 已售数据，计算价格，并以 10 USDC 保证金提交上链。你的保证金在下次报价时或 24 小时后退还 — 除非你的价格是异常值（偏离中位数 >10%），此时你的保证金将被罚没到资金池。
+代理会抓取 PriceCharting、TCGPlayer 和 eBay 已售数据，计算价格，并以按比例 USDC 保证金（报价价格的 1%，最低 10 USDC）提交上链。你的保证金在下次报价时或 24 小时后退还 — 除非你的价格是异常值（偏离中位数 >10%），此时你的保证金将被罚没到资金池。
 
 **保护卡牌价值：**
 
 ```
-!bao sv1-4 put 5
+!bao Charizard ex Scarlet Violet put 14
 ```
 
-代理会获取当前报价者中位数价格，计算权利金和 $BAO 销毁量，并要求你确认。三笔交易会自动签署：批准 $BAO、批准 USDC、购买期权。
+代理会获取当前报价者中位数价格，计算协议权利金（基于 √时间 × 利用率）和 $BAO 销毁量，并要求你确认。三笔交易会自动签署：批准 $BAO、批准 USDC、购买期权。
 
 **提供流动性赚取权利金：**
 
@@ -569,20 +592,20 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 > !bao sv1-4 price                     # 查看喷火龙 ex 价格
   "sv1-4（喷火龙 ex）：$487.50 USDC（4 个报价的中位数）"
 
-> !bao report sv1-4                    # 报价（10 USDC 保证金）
-  "抓取结果：PriceCharting $490，TCGPlayer $485，eBay 已售 $488。提交 $488。保证金：10 USDC。确认？"
+> !bao report sv1-4                    # 报价（按比例保证金）
+  "抓取结果：PriceCharting $490，TCGPlayer $485，eBay 已售 $488。提交 $488。保证金：10 USDC（$488 的 1%，最低 $10）。确认？"
 > 确认
   "报价已提交。保证金：10 USDC（24 小时后或下次报价时可退还）。"
 
-> !bao sv1-4 put 5                     # 以 $487.50 保护 90 天
-  "权利金：5% = $24.38 USDC。$BAO 销毁：0.073 BAO。确认？"
+> !bao Charizard ex Scarlet Violet put 14  # 以 $487.50 保护 14 天
+  "权利金：$37.42 USDC（协议计算）。$BAO 销毁：0.112 BAO。确认？"
 > 确认
-  "期权 #0 已购买。保护价 $487.50，有效期 90 天。"
+  "期权 #0 已购买。保护价 $487.50，有效期 14 天。"
 
   ... 45 天后，价格跌至 $300 ...
 
 > !bao report sv1-4                    # 行权前必须先报价
-  "抓取结果：PriceCharting $305，TCGPlayer $298，eBay 已售 $297。提交 $300。保证金：10 USDC。确认？"
+  "抓取结果：PriceCharting $305，TCGPlayer $298，eBay 已售 $297。提交 $300。保证金：10 USDC（$300 的 1%，最低 $10）。确认？"
 > 确认
   "报价已提交。"
 
@@ -597,23 +620,25 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 ### 购买看跌期权
 
 ```
-!bao sv1-4 put 5
+!bao Charizard ex Scarlet Violet put 14
 ```
 
 1. sv1-4（喷火龙 ex）的报价者中位数价格：**$500 USDC**
-2. 权利金：5% = **$25 USDC** 支付给资金池
-3. $BAO 销毁：权利金的 0.3% = **0.075 BAO** 发送到 0xdEaD
-4. 保护价锁定在 **$500**，有效期 **90 天**
+2. 权利金：**$37.42 USDC**（协议通过 √时间 × 利用率计算）支付给资金池
+3. $BAO 销毁：权利金的 0.3% = **0.112 BAO** 真正销毁（减少 totalSupply）
+4. 保护价锁定在 **$500**，有效期 **14 天**
 
-如果价格在 90 天内跌至 $300：
+如果价格在 14 天内跌至 $300：
 
 ```
 !bao 0 exercise
 ```
 
-补偿金额：$500 - $300 = **$200 USDC**（从资金池支付）。扣除权利金后净利润：**$175**。
+补偿金额：$500 - $300 = **$200 USDC**（从资金池支付）。扣除权利金后净利润：**$162.58**。
 
-如果价格保持在 $500 以上，期权到期作废。资金池保留 $25 权利金。
+如果价格保持在 $500 以上，期权到期作废。资金池保留 $37.42 权利金。
+
+**自动清理：** 过期的期权会在 `buyPut` 和 `withdrawPool` 操作期间自动清理（每次最多 5 个），因此资金池无需人工干预即可保持健康状态。`cleanExpiredPuts` 函数仍可用于手动批量清理。
 
 ### 提供流动性
 
@@ -649,7 +674,9 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 
 ### $BAO 销毁
 
-三种操作会销毁 USDC 金额 0.3% 的 $BAO 代币（发送到 `0xdEaD`）：`buyPut`、`fundPool` 和 `withdrawPool`。报价操作销毁保证金金额的 0.3%。行权（exercisePut）**不会**销毁 — 补偿金额绝不能因为缺少 $BAO 而被阻止。
+三种操作会销毁 USDC 金额 0.3% 的 $BAO 代币（通过 `burnFrom` 真正销毁 — 永久减少 `totalSupply`）：`buyPut`、`fundPool` 和 `withdrawPool`。报价操作销毁保证金金额的 0.3%。行权（exercisePut）**不会**销毁 — 补偿金额绝不能因为缺少 $BAO 而被阻止。
+
+此外，**每笔权利金的 10%** 会平均分配给诚实的新鲜报价者作为可领取的奖励。这激励报价者积极为有期权市场的卡牌报价。
 
 ```
 更多期权购买 → 更多 $BAO 销毁 → 供应减少 → $BAO 价格上升
@@ -661,7 +688,7 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 | 购买期权（$500 卡牌，5% 权利金） | $25 USDC | 0.075 BAO |
 | 购买期权（$500 卡牌，10% 权利金） | $50 USDC | 0.15 BAO |
 | 行权（$200 补偿） | $200 USDC | 无（不销毁） |
-| 报价（10 USDC 保证金） | $10 USDC | 0.03 BAO |
+| 报价（保证金 = max(10, 价格的 1%)） | 保证金（随价格变化） | 保证金的 0.3% |
 | 存入 $1,000 到资金池 | $1,000 USDC | 3 BAO |
 | 从资金池提取 $1,000 | $1,000 USDC | 3 BAO |
 
@@ -669,13 +696,13 @@ $BAO 代币：[`0x67777b71A41eebab7D3aD06498D9d48669025873`](https://bscscan.com
 
 ### 众包定价
 
-没有预言机。任何人都可以通过提交 **10 USDC 保证金** 并上报任何跟踪卡牌的价格来成为报价者。报价者从三个可验证的公开来源抓取价格：[PriceCharting](https://www.pricecharting.com/)、[TCGPlayer](https://www.tcgplayer.com/) 和 eBay 已售数据。
+没有预言机。任何人都可以通过提交 **USDC 保证金**（报价价格的 1%，最低 10 USDC）并上报任何跟踪卡牌的价格来成为报价者。报价者从三个可验证的公开来源抓取价格：[PriceCharting](https://www.pricecharting.com/)、[TCGPlayer](https://www.tcgplayer.com/) 和 eBay 已售数据。
 
 **运作方式：**
 
-1. 报价者调用 `!bao report <卡牌ID>` — 代理抓取三个来源，计算价格，并以 10 USDC 保证金提交上链。
+1. 报价者调用 `!bao report <卡牌ID>` — 代理抓取三个来源，计算价格，并以按比例 USDC 保证金（报价价格的 1%，最低 10 USDC）提交上链。
 2. 当某张卡牌有 **3 个或以上的新鲜报价**（24 小时内）时，这些报价的**中位数**成为用于期权买卖和行权的标准价格。
-3. 如果报价者提交的价格是**异常值**（偏离中位数超过 10%），其 10 USDC 保证金将被**罚没**并转入资金池。
+3. 如果报价者提交的价格是**异常值**（偏离中位数超过 10%），其保证金将被**罚没**并转入资金池。
 4. 诚实的报价者在提交下一次报价时会获得保证金**退还**，或者可以在 24 小时后通过 `!bao claim-bond <卡牌ID>` 领回。
 
 **为什么有效（谢林点）：** 真实价格是自然收敛点，因为三个数据源（PriceCharting、TCGPlayer、eBay 已售）都是公开可验证的。理性的报价者没有动机撒谎 — 提交异常价格意味着损失保证金。你只需要信任大多数报价者是诚实的，而这正是经济理性的策略。
@@ -701,16 +728,18 @@ BaoClaw 是一个 [OpenClaw](https://github.com/openclaw) 技能。所有交互�
 
 ```
 看跌期权：
-  !bao <卡牌ID> put <权利金%>    购买价格保护
-  !bao <卡牌ID> price            查看当前报价者中位数价格
+  !bao <卡牌名称> put <天数>      购买价格保护（1–30 天）
+  !bao <卡牌名称> quote <天数>    购买前预览权利金
+  !bao <卡牌名称> price           查看市场价格 + 链上中位数（免费）
   !bao <期权ID> exercise         行权（领取补偿）
   !bao puts                      列出我的活跃期权
 
 报价：
-  !bao report <卡牌ID>           报价卡牌价格（提交 10 USDC 保证金）
+  !bao report <卡牌ID>           报价卡牌价格（提交按比例 USDC 保证金）
   !bao report-info <卡牌ID>      查看当前报价和中位数
   !bao reporters                 列出活跃报价者
   !bao claim-bond <卡牌ID>       24 小时后领回保证金
+  !bao claim-rewards             领取报价奖励
 
 资金池（LP）：
   !bao pool                      资金池余额和份额价格
@@ -730,13 +759,17 @@ BaoClaw 是一个 [OpenClaw](https://github.com/openclaw) 技能。所有交互�
 
 | 参数 | 值 |
 |---|---|
-| 最低权利金 | 保护价的 3% |
-| 期权有效期 | 90 天 |
+| 权利金模型 | √时间 × 利用率拐点（协议计算） |
+| 基础费率 | 2% |
+| 利用率拐点 | 70% |
+| 最大利用率 | 95% |
+| 期权有效期 | 1–30 天 |
 | 价格过期阈值 | 24 小时 |
-| 报价保证金 | 10 USDC |
+| 报价保证金 | max(10 USDC, 报价价格的 1%) |
 | 最低报价数量 | 3 |
 | 异常值阈值 | 偏离中位数 10% |
-| $BAO 销毁率 | buyPut、fundPool、withdrawPool、report 时 USDC 金额的 0.3% |
+| $BAO 销毁率 | buyPut、fundPool、withdrawPool、report 时 USDC 金额的 0.3%（真正销毁） |
+| 报价奖励 | 权利金的 10% 平均分配给诚实的新鲜报价者 |
 | 链 | 币安智能链 (56) |
 | 结算代币 | USDC |
 
@@ -749,11 +782,11 @@ BaoClaw **没有单一信任实体**。信任分布在众包报价者中。
 | 合约逻辑 | 否 | 开源、可审计、不可变 |
 | 资金池资金 | 否 | LP 可随时按比例提取 |
 | 众包定价 | **分布式** | 你只需要信任大多数报价者是诚实的。谢林点：真实价格是自然收敛点，因为价格来自 3 个可验证的公开来源（PriceCharting、TCGPlayer、eBay 已售）。异常值会被罚没。 |
-| $BAO 销毁 | 否 | 发送到 0xdEaD 是不可逆的 |
+| $BAO 销毁 | 否 | 通过 `burnFrom` 真正销毁减少 totalSupply — 不可逆 |
 | 期权结算 | 否 | 计算在链上：`补偿 = 保护价 - 当前价` |
 | LP 份额 | 否 | 按比例计算：`补偿 = 份额 × 资金池余额 / 总份额` |
 
-如果大多数报价者串通提交虚假价格，可能导致不正确的补偿。缓解措施：串通的报价者每次报价都需要冒 10 USDC 的风险，而诚实的报价者随时可以提交正确价格将中位数拉回真实值。资金不会被掏空 — 合约只支付 `保护价 - 当前价`，资金池不会变为负数。
+如果大多数报价者串通提交虚假价格，可能导致不正确的补偿。缓解措施：串通的报价者每次报价都需要冒与报价价格成比例的保证金风险（价格的 1%，最低 10 USDC），而诚实的报价者随时可以提交正确价格将中位数拉回真实值。资金不会被掏空 — 合约只支付 `保护价 - 当前价`，资金池不会变为负数。
 
 ## 许可证
 
